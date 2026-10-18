@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch: {}
+permissions:
+  contents: read
+  issues: write
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -17,7 +20,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Build
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log
+      - name: Report error
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "Build log (errors and tail):"; echo "~~~"; grep -E "error:|^e: |What went wrong|Could not|FAILURE|Caused by|not found|Unresolved|wrong" -A3 build.log | head -80; echo "~~~"; echo "Tail:"; echo "~~~"; tail -n 40 build.log; echo "~~~"; } > body.md
+          gh issue create --title "Build failed" --body-file body.md
       - uses: actions/upload-artifact@v4
         with:
           name: MangaRomaji-apk
