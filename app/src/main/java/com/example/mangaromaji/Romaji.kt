@@ -8,7 +8,9 @@ import java.text.Normalizer
 class Romanizer {
 
     private val tk = Tokenizer.Builder().build()
-    private val cache = HashMap<String, String>()
+    private val cache = object : LinkedHashMap<String, String>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 512
+    }
 
     fun convert(raw: String): String = cache.getOrPut(raw) {
         Normalizer.normalize(raw, Normalizer.Form.NFKC)

@@ -7,13 +7,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:allowBackup="true"
-        android:label="Manga Romaji"
+        android:allowBackup="false"
+        android:label="Manga Romaji Preview"
         android:largeHeap="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.example.mangaromaji.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -22,7 +22,7 @@
         </activity>
 
         <service
-            android:name=".OverlayService"
+            android:name="com.example.mangaromaji.OverlayService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
     </application>

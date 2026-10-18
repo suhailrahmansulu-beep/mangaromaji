@@ -1,11 +1,12 @@
-name: Build APK
+name: Reversible preview
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: {}
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: write
-  issues: write
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -14,31 +15,37 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - name: Accept Android licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
-      - name: Build
+          gradle-version: '8.7'
+      - name: Unit tests, lint and APK
+        run: gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
+      - name: Package preview APK
         run: |
-          set -o pipefail
-          gradle assembleDebug --no-daemon 2>&1 | tee build.log
-      - name: Report error
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          { echo "Build log (errors and tail):"; echo "~~~"; grep -E "error:|^e: |What went wrong|Could not|FAILURE|Caused by|not found|Unresolved|wrong" -A3 build.log | head -80; echo "~~~"; echo "Tail:"; echo "~~~"; tail -n 40 build.log; echo "~~~"; } > body.md
-          gh issue create --title "Build failed" --body-file body.md
-      - name: Publish APK as a release
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cp app/build/outputs/apk/debug/app-debug.apk MangaRomaji.apk
-          gh release create "build-${{ github.run_number }}" MangaRomaji.apk --title "Manga Romaji build ${{ github.run_number }}" --notes "Debug APK. Download MangaRomaji.apk and install." --latest
+          python3 -c 'import json; p=json.load(open("app/build/outputs/apk/debug/output-metadata.json")); assert p["applicationId"] == "com.example.mangaromaji.preview", "Refusing to publish an APK that could replace the original"'
+          mkdir -p dist
+          NAME="MangaRomaji-1.1.0-preview-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:7}-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/$NAME"
+          cd dist
+          sha256sum "$NAME" > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: MangaRomaji-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: MangaRomaji-preview-${{ github.run_number }}-${{ github.run_attempt }}
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preview-test-lint-${{ github.run_number }}-${{ github.run_attempt }}
+          path: app/build/reports/
+      - name: Publish reversible prerelease
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          gh release create "preview-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" dist/*.apk dist/SHA256SUMS.txt --target "$RELEASE_SHA" --title "Manga Romaji Preview ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" --notes-file PREVIEW.md --prerelease
