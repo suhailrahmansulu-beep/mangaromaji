@@ -1,9 +1,8 @@
-Manga Romaji (Android)
+Romaji Reader (Android) - one floating "A" button: tap it, the Japanese on screen becomes romaji.
 
-No PC? Push this folder to a GitHub repo. The included workflow (.github/workflows/build.yml)
-builds the APK in the cloud. Download it from the repo's Actions tab -> latest run -> Artifacts.
+Start it BEFORE opening your game (Android shows a one-time permission popup on start).
+Open app -> Allow overlay -> Add tile. Pull down Quick Settings -> tap "Romaji" -> Entire screen.
+Then open the game and tap A. Tap A again to clear. Tile again (or long-press A) to turn off.
 
-With Android Studio: open this folder, let Gradle sync, run on a phone (Android 8+).
-
-Using it: tap Start -> allow "Display over other apps" -> tap Start again -> choose "Entire screen".
-Open your manga, tap the round floating button (red = on). Long-press it to quit.
+Build with no PC: push this folder to GitHub; the workflow in .github/workflows builds the APK
+and posts it under Releases.
