@@ -15,7 +15,7 @@ class RomajiTile : TileService() {
     override fun onClick() {
         val running = OverlayService.instance
         if (running != null) {
-            running.stopSelf()
+            running.stopBy("Stopped from the tile")
             OverlayService.running = false
             refresh()
             return

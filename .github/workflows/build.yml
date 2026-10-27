@@ -36,9 +36,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk MangaRomaji.apk
-          gh release create "build-${{ github.run_number }}" MangaRomaji.apk --title "Manga Romaji build ${{ github.run_number }}" --notes "Debug APK. Download MangaRomaji.apk and install." --latest
+          cp app/build/outputs/apk/debug/app-debug.apk RomajiReader.apk
+          gh release create "build-${{ github.run_number }}" RomajiReader.apk --title "Romaji Reader build ${{ github.run_number }}" --notes "Debug APK. Download RomajiReader.apk and install." --latest
       - uses: actions/upload-artifact@v4
         with:
-          name: MangaRomaji-apk
+          name: RomajiReader.apk
           path: app/build/outputs/apk/debug/app-debug.apk

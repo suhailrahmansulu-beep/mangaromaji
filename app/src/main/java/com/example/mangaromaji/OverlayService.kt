@@ -31,18 +31,24 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.TextView
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.Translator
+import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import kotlinx.coroutines.*
 import kotlinx.coroutines.tasks.await
+import java.text.DateFormat
+import java.util.Date
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
 /**
  * One floating "A" button. Tap it: grab ONE frame, read the Japanese on it, paint romaji
- * over the text. Tap again (or wait) and it disappears.
+ * (and optionally English) over the text. Tap again (or wait) and it disappears.
  *
  * Built so it never disturbs a game:
  *  - nothing here opens a screen or takes focus; the game stays in front the whole time
@@ -59,7 +65,10 @@ class OverlayService : Service() {
     private var button: TextView? = null
     private var layer: BubbleLayer? = null
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e -> note("Error: ${e.javaClass.simpleName}") }
+    )
     @Volatile private var W = 0
     @Volatile private var H = 0
     private var dpi = 0
@@ -67,7 +76,12 @@ class OverlayService : Service() {
     @Volatile private var busy = false
     private var shown = false
 
+    // Why we stopped (shown on the main screen)
+    private var stopReason: String? = null
+    private var lowMemory = false
+
     @Volatile private var romanizer: Romanizer? = null
+    private var translator: Translator? = null
     private val recognizer by lazy {
         TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
     }
@@ -81,9 +95,13 @@ class OverlayService : Service() {
 
     override fun onBind(i: Intent?): IBinder? = null
 
+    fun stopBy(reason: String) { stopReason = reason; stopSelf() }
+
+    private fun note(s: String) { runCatching { Prefs.setLastStop(this, s) } }
+
     @Suppress("DEPRECATION")
     override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
-        if (i?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
+        if (i?.action == ACTION_STOP) { stopBy("Stopped from the notification"); return START_NOT_STICKY }
         if (projection != null) return START_NOT_STICKY
         val code = i?.getIntExtra("code", 0) ?: 0
         val data: Intent? = i?.getParcelableExtra("data")
@@ -94,7 +112,7 @@ class OverlayService : Service() {
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = mpm.getMediaProjection(code, data).also {
             it.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() { stopSelf() }
+                override fun onStop() { stopBy("Android ended screen capture (it does this on its own sometimes)") }
             }, main)
         }
 
@@ -133,6 +151,11 @@ class OverlayService : Service() {
         if (Build.VERSION.SDK_INT >= 29)
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         else startForeground(1, n)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL) lowMemory = true
     }
 
     // ---------- screen size / rotation ----------
@@ -176,7 +199,7 @@ class OverlayService : Service() {
         val size = (46 * density).toInt()
         val b = TextView(this).apply {
             text = "A"; textSize = 19f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; alpha = 0.85f
-            background = circle(Color.argb(255, 70, 74, 84))
+            background = circle(IDLE)
         }
         val lp = WindowManager.LayoutParams(
             size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -199,7 +222,7 @@ class OverlayService : Service() {
                     if (moved) { lp.x = sx + dx.toInt(); lp.y = sy + dy.toInt(); wm.updateViewLayout(b, lp) }
                 }
                 MotionEvent.ACTION_UP -> if (!moved) {
-                    if (System.currentTimeMillis() - downT > 700) stopSelf() else onTap()
+                    if (System.currentTimeMillis() - downT > 700) stopBy("Stopped with a long-press on the A") else onTap()
                 }
             }
             true
@@ -220,26 +243,33 @@ class OverlayService : Service() {
     private fun onTap() {
         if (busy) return
         if (shown) { clearBubbles(); return }
-        if (romanizer == null) { setState(Color.rgb(230, 150, 30), "…"); main.postDelayed({ if (!shown) setState(IDLE, "A") }, 1500); return }
+        val mode = Prefs.mode(this)
+        if (mode != 2 && romanizer == null) {
+            setState(WORKING, "…"); main.postDelayed({ if (!shown && !busy) setState(IDLE, "A") }, 1500); return
+        }
         busy = true
-        setState(Color.rgb(230, 150, 30), "…")
+        setState(WORKING, "…")
         scope.launch {
             var bubbles: List<BubbleLayer.Bubble> = emptyList()
+            var bmp: Bitmap? = null
             try {
-                val bmp = captureFrame()
-                if (bmp != null) bubbles = recognize(bmp)
+                bmp = captureFrame()
+                if (bmp != null) bubbles = recognize(bmp, mode, Prefs.macrons(this@OverlayService))
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (t: Throwable) {            // includes out-of-memory: skip this tap, stay alive
+                note("Skipped a tap: ${t.javaClass.simpleName}")
             } finally {
+                runCatching { bmp?.recycle() }
                 withContext(NonCancellable + Dispatchers.Main) {
                     vdisplay?.surface = null                 // mirroring off again
                     busy = false
                     if (bubbles.isNotEmpty()) {
                         layer?.setBubbles(bubbles); shown = true
-                        setState(Color.rgb(216, 50, 42), "A")
+                        setState(SHOWING, "A")
                         main.removeCallbacks(hideRunnable)
-                        main.postDelayed(hideRunnable, SHOW_MS)
+                        val sec = Prefs.hideSec(this@OverlayService)
+                        if (sec > 0) main.postDelayed(hideRunnable, sec * 1000L)
                     } else {
                         setState(IDLE, "A")
                     }
@@ -271,18 +301,31 @@ class OverlayService : Service() {
         return bmp
     }
 
+    /** One bitmap, no extra copy. Any padding sits on the right edge and is ignored by the reader. */
     private fun toBitmap(img: Image): Bitmap {
         val p = img.planes[0]
         val pad = p.rowStride - p.pixelStride * img.width
         val full = Bitmap.createBitmap(img.width + pad / p.pixelStride, img.height, Bitmap.Config.ARGB_8888)
         full.copyPixelsFromBuffer(p.buffer)
-        return if (pad == 0) full else Bitmap.createBitmap(full, 0, 0, img.width, img.height)
+        return full
     }
 
-    // ---------- OCR + romaji ----------
+    // ---------- OCR + romaji (+ English) ----------
 
-    private suspend fun recognize(bmp: Bitmap): List<BubbleLayer.Bubble> {
-        val rom = romanizer ?: return emptyList()
+    private fun stripMacrons(s: String) = s.map { STRIP[it] ?: it }.joinToString("")
+
+    private suspend fun english(text: String): String? = try {
+        val t = translator ?: Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(TranslateLanguage.JAPANESE)
+                .setTargetLanguage(TranslateLanguage.ENGLISH).build()
+        ).also { translator = it }
+        t.translate(text).await()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) { null }
+
+    private suspend fun recognize(bmp: Bitmap, mode: Int, macrons: Boolean): List<BubbleLayer.Bubble> {
         val res = recognizer.process(InputImage.fromBitmap(bmp, 0)).await()
         val out = ArrayList<BubbleLayer.Bubble>()
         for (block in res.textBlocks) {
@@ -295,8 +338,15 @@ class OverlayService : Service() {
                           else lines.sortedBy { it.boundingBox?.top ?: 0 }
             val jp = ordered.joinToString(" ") { it.text }.replace(GAP, "")
             if (!JP.containsMatchIn(jp)) continue
-            val roma = rom.convert(jp)
-            if (roma.isBlank()) continue
+
+            val roma = romanizer?.convert(jp)?.let { if (macrons) it else stripMacrons(it) }
+            val eng = if (mode != 0) english(jp) else null
+            val text = when (mode) {
+                1 -> listOfNotNull(roma, eng).joinToString("\n")
+                2 -> eng ?: roma
+                else -> roma
+            } ?: continue
+            if (text.isBlank()) continue
 
             val r = RectF(box)
             if (vertical) {
@@ -306,7 +356,7 @@ class OverlayService : Service() {
             r.inset(-6f, -6f)
             r.left = max(0f, r.left); r.top = max(0f, r.top)
             r.right = min(W.toFloat(), r.right); r.bottom = min(H.toFloat(), r.bottom)
-            out.add(BubbleLayer.Bubble(r, roma))
+            out.add(BubbleLayer.Bubble(r, text))
         }
         return out
     }
@@ -322,6 +372,10 @@ class OverlayService : Service() {
         vdisplay?.release(); reader?.close()
         projection?.stop()
         runCatching { recognizer.close() }
+        runCatching { translator?.close() }
+        val why = stopReason ?: if (lowMemory) "Android was low on memory (a game can cause this)"
+                                else "Unknown. Android closed it. Turn off battery optimization."
+        note("$why  (${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())})")
         instance = null
         running = false
         TileService.requestListeningState(this, ComponentName(this, RomajiTile::class.java))
@@ -333,7 +387,9 @@ class OverlayService : Service() {
         @Volatile var running = false
         @Volatile var instance: OverlayService? = null
         private val IDLE = Color.argb(255, 70, 74, 84)
-        private const val SHOW_MS = 12000L        // romaji auto-hides after this
+        private val WORKING = Color.rgb(230, 150, 30)
+        private val SHOWING = Color.rgb(216, 50, 42)
+        private val STRIP = mapOf('ā' to 'a', 'ī' to 'i', 'ū' to 'u', 'ē' to 'e', 'ō' to 'o')
         private val JP = Regex("[\u3040-\u30ff\u3400-\u9fff]")
         private val GAP = Regex("(?<=[^\\x00-\\x7F])\\s+(?=[^\\x00-\\x7F])")
     }
