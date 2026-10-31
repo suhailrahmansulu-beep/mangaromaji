@@ -1,0 +1,50 @@
+name: Build Windows app
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  issues: write
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Self-test romaji
+        run: |
+          set -o pipefail
+          python test_romaji.py 2>&1 | tee test.log
+      - name: Build
+        run: |
+          set -o pipefail
+          python -m PyInstaller --noconfirm --noconsole --name RomajiOverlay --collect-data ipadic --collect-binaries MeCab --collect-submodules MeCab --collect-all winsdk app.py 2>&1 | tee build.log
+      - name: Zip
+        run: |
+          cd dist
+          7z a ../RomajiOverlay-Windows.zip RomajiOverlay > /dev/null
+      - name: Report error
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "Windows build failed. Log tail:"; echo "~~~"; cat test.log build.log 2>/dev/null | grep -vE "^\s*[0-9]+ INFO" | tail -n 70; echo "~~~"; } > body.md
+          gh issue create --title "Windows build failed" --body-file body.md
+      - name: Publish release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "win-${{ github.run_number }}" RomajiOverlay-Windows.zip --title "Romaji Overlay for Windows (build ${{ github.run_number }})" --notes "Unzip, run RomajiOverlay.exe, press Ctrl+Alt+R in your game. See README.txt." --latest=false

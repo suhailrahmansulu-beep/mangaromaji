@@ -1,0 +1,5 @@
+mecab-python3
+ipadic
+winsdk
+pillow
+pyinstaller
