@@ -15,9 +15,6 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: utf-8
     defaults:
       run:
         shell: bash
