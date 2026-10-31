@@ -12,6 +12,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     defaults:
       run:
         shell: bash
@@ -40,7 +43,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          { echo "Windows build failed. Log tail:"; echo "~~~"; cat test.log build.log 2>/dev/null | grep -vE "^\s*[0-9]+ INFO" | tail -n 70; echo "~~~"; } > body.md
+          { echo "Windows build failed. Log tail:"; echo "~~~"; (cat test.log build.log 2>/dev/null || true) | (grep -vE "^\s*[0-9]+ INFO" || true) | tail -n 70; echo "~~~"; } > body.md
           gh issue create --title "Windows build failed" --body-file body.md
       - name: Publish release
         if: success()
