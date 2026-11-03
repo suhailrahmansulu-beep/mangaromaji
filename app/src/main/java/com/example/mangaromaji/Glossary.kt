@@ -1,0 +1,53 @@
+package com.example.mangaromaji
+
+/** Names and terms the general dictionary gets wrong (read as they are in Japanese). */
+object Glossary {
+    val map: Map<String, String> = mapOf(
+        "神里綾華" to "Kamisato Ayaka",
+        "神里綾人" to "Kamisato Ayato",
+        "鍾離" to "Shōri",
+        "魈" to "Shō",
+        "胡桃" to "Fūtao",
+        "刻晴" to "Kokusei",
+        "甘雨" to "Kan'u",
+        "宵宮" to "Yoimiya",
+        "雷電将軍" to "Raiden Shōgun",
+        "楓原万葉" to "Kaedehara Kazuha",
+        "珊瑚宮心海" to "Sangonomiya Kokomi",
+        "八重神子" to "Yae Miko",
+        "申鶴" to "Shinkaku",
+        "夜蘭" to "Yaran",
+        "鹿野院平蔵" to "Shikanoin Heizō",
+        "久岐忍" to "Kuki Shinobu",
+        "九条裟羅" to "Kujō Sara",
+        "北斗" to "Hokuto",
+        "煙緋" to "Enhi",
+        "云菫" to "Unkin",
+        "辛炎" to "Shin'en",
+        "香菱" to "Kōryō",
+        "行秋" to "Kōshū",
+        "重雲" to "Chōun",
+        "凝光" to "Gyōkō",
+        "七七" to "Chīchī",
+        "荒瀧一斗" to "Arataki Itto",
+        "旅人" to "Tabibito",
+        "璃月港" to "Ritsuki-kō",
+        "璃月" to "Ritsuki",
+        "稲妻" to "Inazuma",
+        "鳴神島" to "Narukami-jima",
+        "原神" to "Genshin",
+        "原石" to "genseki",
+        "聖遺物" to "seiibutsu",
+        "樹脂" to "jushi",
+        "秘境" to "hikyō",
+        "深境螺旋" to "Shinkyō Rasen",
+        "元素爆発" to "genso bakuhatsu",
+        "命ノ星座" to "inochi no seiza",
+        "神の目" to "kami no me",
+        "七神" to "shichishin",
+        "仙人" to "sennin",
+        "世界ランク" to "sekai ranku",
+        "冒険ランク" to "bōken ranku"
+    )
+    val regex: Regex = Regex(map.keys.sortedByDescending { it.length }.joinToString("|") { Regex.escape(it) })
+}

@@ -16,65 +16,78 @@ class Romanizer {
             .joinToString(" ") { line(it) }
     }
 
-    private class It(var text: String, val kind: Int, var tok: Token?, val proper: Boolean = false, val first: Boolean = false)
+    private class It(var text: String, val kind: Int, var tok: Token?, val proper: Boolean = false, val first: Boolean = false, val raw: Boolean = false)
 
     private fun line(line: String): String {
         val items = ArrayList<It>()
         var glueNext = false
         var prev: Token? = null
+        var afterName = false
 
-        for (t in tk.tokenize(line)) {
-            val s = t.surface
-            if (t.partOfSpeechLevel1 == "記号" || PUNCT_ONLY.matches(s)) {
-                val p = PUNCT[s] ?: s
-                if (p == " ") { prev = t; glueNext = false; continue }
-                val kind = when {
-                    CLOSE.contains(p) || p.all { CLOSE.contains(it.toString()) } -> 1
-                    OPEN.contains(p) -> 2
-                    else -> 0
+        fun addTokens(text: String) {
+            for (t in tk.tokenize(text)) {
+                val s = t.surface
+                if (t.partOfSpeechLevel1 == "記号" || PUNCT_ONLY.matches(s)) {
+                    val p = PUNCT[s] ?: s
+                    prev = t; glueNext = false; afterName = false
+                    if (p == " ") continue
+                    val kind = when {
+                        CLOSE.contains(p) || p.all { CLOSE.contains(it.toString()) } -> 1
+                        OPEN.contains(p) -> 2
+                        else -> 0
+                    }
+                    items.add(It(p, kind, t))
+                    continue
                 }
-                items.add(It(p, kind, t))
-                prev = t; glueNext = false
-                continue
-            }
 
-            val rt = tokenRomaji(t)
-            val d1 = t.partOfSpeechLevel2
-            val d2 = t.partOfSpeechLevel3
-            val last = items.lastOrNull()
-            val canGlue = last != null && last.kind == 0 && last.first
+                val rt = tokenRomaji(t)
+                val d1 = t.partOfSpeechLevel2
+                val d2 = t.partOfSpeechLevel3
+                val last = items.lastOrNull()
+                val canGlue = last != null && last.kind == 0 && last.first
 
-            val copula = t.partOfSpeechLevel1 == "助動詞" &&
-                s in setOf("だ", "です", "だっ", "でし", "だろ", "でしょ") &&
-                prev?.partOfSpeechLevel1 == "名詞"
-            val contraction = t.partOfSpeechLevel1 == "動詞" && d1 == "非自立" && (s.startsWith("て") || s.startsWith("で"))
-            val suffix = contraction ||
-                (!copula && t.partOfSpeechLevel1 == "助動詞") ||
-                d1 == "接尾" ||
-                (t.partOfSpeechLevel1 == "助詞" && d1 == "接続助詞" && (s == "て" || s == "で"))
+                val copula = t.partOfSpeechLevel1 == "助動詞" &&
+                    s in setOf("だ", "です", "だっ", "でし", "だろ", "でしょ") &&
+                    prev?.partOfSpeechLevel1 == "名詞"
+                val contraction = t.partOfSpeechLevel1 == "動詞" && d1 == "非自立" && (s.startsWith("て") || s.startsWith("で"))
+                val suffix = contraction ||
+                    (!copula && t.partOfSpeechLevel1 == "助動詞") ||
+                    d1 == "接尾" ||
+                    (t.partOfSpeechLevel1 == "助詞" && d1 == "接続助詞" && (s == "て" || s == "で"))
 
-            if (canGlue && (glueNext || suffix)) {
-                val hyphen = d1 == "接尾" && d2 == "人名" && prev?.partOfSpeechLevel2 == "固有名詞"
-                var x = rt
-                if (last!!.text.endsWith('\u0001')) {
-                    last.text = last.text.dropLast(1)
-                    x = applyGem(x)
+                if (canGlue && (glueNext || suffix)) {
+                    val hyphen = d1 == "接尾" && d2 == "人名" && (afterName || prev?.partOfSpeechLevel2 == "固有名詞")
+                    var x = rt
+                    if (last!!.text.endsWith('\u0001')) {
+                        last.text = last.text.dropLast(1)
+                        x = applyGem(x)
+                    }
+                    last.text += (if (hyphen) "-" else "") + x
+                    last.tok = t
+                } else {
+                    if (last != null && last.text.endsWith('\u0001')) last.text = last.text.dropLast(1)
+                    items.add(It(rt, 0, t, proper = d1 == "固有名詞", first = true))
                 }
-                last.text += (if (hyphen) "-" else "") + x
-                last.tok = t
-            } else {
-                if (last != null && last.text.endsWith('\u0001')) last.text = last.text.dropLast(1)
-                items.add(It(rt, 0, t, proper = d1 == "固有名詞", first = true))
+                glueNext = t.partOfSpeechLevel1 == "接頭詞"
+                prev = t
+                afterName = false
             }
-            glueNext = t.partOfSpeechLevel1 == "接頭詞"
-            prev = t
         }
+
+        var pos = 0
+        for (m in Glossary.regex.findAll(line)) {
+            if (m.range.first > pos) addTokens(line.substring(pos, m.range.first))
+            items.add(It(Glossary.map.getValue(m.value), 0, null, first = true, raw = true))
+            afterName = true; prev = null; glueNext = false
+            pos = m.range.last + 1
+        }
+        if (pos < line.length) addTokens(line.substring(pos))
 
         val out = StringBuilder()
         var pk = "start"
         for (it in items) {
             var txt = it.text.replace("\u0001", "")
-            if (it.kind == 0 && it.first) {
+            if (it.kind == 0 && it.first && !it.raw) {
                 txt = mergeLong(txt, it.tok)
                 if (it.proper && txt.isNotEmpty()) txt = txt.substring(0, 1).uppercase() + txt.substring(1)
             }

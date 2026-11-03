@@ -336,7 +336,7 @@ class OverlayService : Service() {
             }
             val ordered = if (vertical) lines.sortedByDescending { it.boundingBox!!.centerX() }
                           else lines.sortedBy { it.boundingBox?.top ?: 0 }
-            val jp = ordered.joinToString(" ") { it.text }.replace(GAP, "")
+            val jp = ordered.joinToString(" ") { it.text }.replace(GAP, "").replace(ICHI, "ー")
             if (!JP.containsMatchIn(jp)) continue
 
             val roma = romanizer?.convert(jp)?.let { if (macrons) it else stripMacrons(it) }
@@ -392,5 +392,7 @@ class OverlayService : Service() {
         private val STRIP = mapOf('ā' to 'a', 'ī' to 'i', 'ū' to 'u', 'ē' to 'e', 'ō' to 'o')
         private val JP = Regex("[\u3040-\u30ff\u3400-\u9fff]")
         private val GAP = Regex("(?<=[^\\x00-\\x7F])\\s+(?=[^\\x00-\\x7F])")
+        // OCR often reads the long-vowel mark as the kanji for "one" inside katakana words
+        private val ICHI = Regex("(?<=[\u30a1-\u30f6\u30fc])一(?=[\u30a1-\u30f6\u30fc]|$|[\\s。、！？!?.,をがはにでともへのやか])")
     }
 }

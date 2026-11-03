@@ -6,6 +6,13 @@ from collections import namedtuple
 import ipadic
 import MeCab
 
+from glossary import GLOSSARY
+
+try:
+    import pykakasi
+except Exception:  # fallback is optional
+    pykakasi = None
+
 Tok = namedtuple("Tok", "surface pos d1 d2 cform reading")
 
 _K = dict(zip(*[iter((
@@ -30,6 +37,10 @@ _KANA = re.compile(r"^[\u3040-\u30ff]+$")
 _SENT = re.compile(r"(^|[.!?]\s+|[“\"]\s*)([a-zāīūēō])")
 JP = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 _GAP = re.compile(r"(?<=[^\x00-\x7F])\s+(?=[^\x00-\x7F])")
+_GLOSS_RE = re.compile("|".join(re.escape(k) for k in sorted(GLOSSARY, key=len, reverse=True)))
+_KANJI = re.compile(r"[\u3400-\u9fff]")
+# OCR often reads the long-vowel mark ー as the kanji 一 inside katakana words
+_ICHI = re.compile(r"(?<=[\u30a1-\u30f6\u30fc])一(?=[\u30a1-\u30f6\u30fc]|$|[\s。、！？!?.,をがはにでともへのやか])")
 
 
 def _hira2kata(s):
@@ -104,8 +115,8 @@ def _to_roma(kata):
 
 
 class _It:
-    def __init__(self, text, kind, tok, proper=False, first=False):
-        self.text, self.kind, self.tok, self.proper, self.first = text, kind, tok, proper, first
+    def __init__(self, text, kind, tok, proper=False, first=False, raw=False):
+        self.text, self.kind, self.tok, self.proper, self.first, self.raw = text, kind, tok, proper, first, raw
 
 
 class Romanizer:
@@ -113,6 +124,7 @@ class Romanizer:
         self.tagger = MeCab.Tagger(ipadic.MECAB_ARGS)
         self.macrons = macrons
         self._cache = {}
+        self._kks = None
 
     def convert(self, raw):
         key = (raw, self.macrons)
@@ -147,6 +159,15 @@ class Romanizer:
             return _to_roma(t.reading)
         if _KANA.match(s):
             return _to_roma(_hira2kata(s))
+        if _KANJI.search(s) and pykakasi is not None:
+            try:
+                if self._kks is None:
+                    self._kks = pykakasi.kakasi()
+                kana = "".join(x["kana"] for x in self._kks.convert(s))
+                if not _KANJI.search(kana):
+                    return _to_roma(kana)
+            except Exception:
+                pass
         return s
 
     @staticmethod
@@ -159,16 +180,29 @@ class Romanizer:
 
     def _line(self, line):
         items = []
-        glue_next = False
-        prev = None
-        for t in self._tokens(line):
+        st = {"glue": False, "prev": None, "name": False}
+        pos = 0
+        for m in _GLOSS_RE.finditer(line):
+            if m.start() > pos:
+                self._add(line[pos:m.start()], items, st)
+            items.append(_It(GLOSSARY[m.group()], 0, None, first=True, raw=True))
+            st["name"] = True; st["prev"] = None; st["glue"] = False
+            pos = m.end()
+        if pos < len(line):
+            self._add(line[pos:], items, st)
+        return self._assemble(items)
+
+    def _add(self, text, items, st):
+        for t in self._tokens(text):
             s = t.surface
+            prev = st["prev"]
             if t.pos == "記号" or _PUNCT_ONLY.match(s):
                 p = _PUNCT.get(s, s)
+                st["prev"] = t; st["glue"] = False; st["name"] = False
                 if p == " ":
-                    prev = t; glue_next = False; continue
+                    continue
                 kind = 1 if (p in _CLOSE or all(c in _CLOSE for c in p)) else 2 if p in _OPEN else 0
-                items.append(_It(p, kind, t)); prev = t; glue_next = False
+                items.append(_It(p, kind, t))
                 continue
             rt = self._token_romaji(t)
             last = items[-1] if items else None
@@ -178,8 +212,9 @@ class Romanizer:
             contraction = t.pos == "動詞" and t.d1 == "非自立" and s[:1] in ("て", "で")
             suffix = (contraction or (not copula and t.pos == "助動詞") or t.d1 == "接尾"
                       or (t.pos == "助詞" and t.d1 == "接続助詞" and s in ("て", "で")))
-            if can_glue and (glue_next or suffix):
-                hyphen = t.d1 == "接尾" and t.d2 == "人名" and prev is not None and prev.d1 == "固有名詞"
+            if can_glue and (st["glue"] or suffix):
+                hyphen = (t.d1 == "接尾" and t.d2 == "人名"
+                          and (st["name"] or (prev is not None and prev.d1 == "固有名詞")))
                 x = rt
                 if last.text.endswith("\u0001"):
                     last.text = last.text[:-1]
@@ -190,13 +225,16 @@ class Romanizer:
                 if last is not None and last.text.endswith("\u0001"):
                     last.text = last.text[:-1]
                 items.append(_It(rt, 0, t, proper=(t.d1 == "固有名詞"), first=True))
-            glue_next = t.pos == "接頭詞"
-            prev = t
+            st["glue"] = t.pos == "接頭詞"
+            st["prev"] = t
+            st["name"] = False
+
+    def _assemble(self, items):
         out = ""
         pk = "start"
         for it in items:
             txt = it.text.replace("\u0001", "")
-            if it.kind == 0 and it.first:
+            if it.kind == 0 and it.first and not it.raw:
                 txt = self._merge_long(txt, it.tok)
                 if it.proper and txt:
                     txt = txt[0].upper() + txt[1:]
@@ -211,4 +249,4 @@ class Romanizer:
 
 def clean_ocr(text):
     """Remove spaces OCR puts between Japanese characters."""
-    return _GAP.sub("", text)
+    return _ICHI.sub("ー", _GAP.sub("", text))

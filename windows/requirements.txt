@@ -2,4 +2,5 @@ mecab-python3
 ipadic
 winsdk
 pillow
+pykakasi
 pyinstaller

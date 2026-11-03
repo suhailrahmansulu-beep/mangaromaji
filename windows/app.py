@@ -14,10 +14,11 @@ import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
+from tkinter import ttk
 from ctypes import wintypes
 from tkinter import messagebox, scrolledtext
 
-from PIL import ImageGrab
+from PIL import Image, ImageGrab
 
 from romaji import JP, Romanizer, clean_ocr
 
@@ -133,7 +134,7 @@ class Overlay:
 
     def show(self, items):
         self.canvas.delete("all")
-        for (x, y, w, h, text) in items:
+        for (x, y, w, h, text, _jp) in items:
             self._bubble(x, y, w, h, text)
         self.win.deiconify()
         self._style()
@@ -189,6 +190,14 @@ class App:
         self.secs = tk.IntVar(value=12)
         tk.Spinbox(opts, from_=3, to=60, width=4, textvariable=self.secs).pack(side="left", padx=4)
         tk.Label(opts, text="s", fg="#EEF1F6", bg="#0E1117").pack(side="left")
+
+        sc = tk.Frame(self.root, bg="#0E1117")
+        sc.pack(anchor="w", padx=16, pady=(8, 0))
+        tk.Label(sc, text="Reading quality", fg="#EEF1F6", bg="#0E1117").pack(side="left")
+        self.quality = ttk.Combobox(sc, state="readonly", width=22,
+                                    values=["Fast (1x)", "Better (1.5x)", "Best, slower (2x)"])
+        self.quality.current(1)
+        self.quality.pack(side="left", padx=6)
 
         tk.Label(self.root, text="History", fg="#8C96A8", bg="#0E1117",
                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16, pady=(12, 2))
@@ -256,18 +265,22 @@ class App:
         self.busy = True
         self._set("Reading the screen...")
         image = ImageGrab.grab(bbox=(0, 0, SW, SH)).convert("RGB")   # overlay is hidden now
-        threading.Thread(target=self._work, args=(image,), daemon=True).start()
+        scale = (1.0, 1.5, 2.0)[max(0, self.quality.current())]
+        threading.Thread(target=self._work, args=(image, scale), daemon=True).start()
 
-    def _work(self, image):
+    def _work(self, image, scale):
         try:
-            blocks = group_lines(self.ocr.read(image))
+            if scale != 1.0:   # bigger text reads far more accurately
+                image = image.resize((int(SW * scale), int(SH * scale)), Image.LANCZOS)
+            lines = [(x / scale, y / scale, w / scale, h / scale, t) for x, y, w, h, t in self.ocr.read(image)]
+            blocks = group_lines(lines)
             items = []
             for x, y, w, h, text in blocks:
                 if not JP.search(text):
                     continue
                 roma = self.rom.convert(text)
                 if roma.strip():
-                    items.append((x, y, w, h, roma))
+                    items.append((x, y, w, h, roma, text))
             self.q.put(("result", items))
         except Exception as e:
             self.q.put(("error", f"Could not read the screen: {e}"))
@@ -279,8 +292,8 @@ class App:
             return
         self.overlay.show(items)
         self._set(f"Showing {len(items)} text block(s). Press {HOTKEY_TEXT} to clear.")
-        for *_, t in items:
-            self.log.insert("end", t + "\n\n")
+        for (*_, t, jp) in items:
+            self.log.insert("end", jp + "\n" + t + "\n\n")
         self.log.see("end")
         if self.hide_job:
             self.root.after_cancel(self.hide_job)

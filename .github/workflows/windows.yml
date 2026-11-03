@@ -33,7 +33,7 @@ jobs:
       - name: Build
         run: |
           set -o pipefail
-          python -m PyInstaller --noconfirm --noconsole --name RomajiOverlay --collect-data ipadic --collect-binaries MeCab --collect-submodules MeCab --collect-all winsdk app.py 2>&1 | tee build.log
+          python -m PyInstaller --noconfirm --noconsole --name RomajiOverlay --collect-data ipadic --collect-binaries MeCab --collect-submodules MeCab --collect-all winsdk --collect-all pykakasi app.py 2>&1 | tee build.log
       - name: Zip
         run: |
           cd dist
